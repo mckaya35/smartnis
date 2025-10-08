@@ -180,11 +180,13 @@ async def command_loop(client: BinanceClient, tg: TelegramNotifier, poller: Tele
     while True:
         await asyncio.sleep(2)
         for (cmd, from_id) in poller.get_commands():
+            if CFG.admin_user_id and from_id != str(CFG.admin_user_id):
+                continue
+            # Komut adını normalize et: "/cmd arg" veya "/cmd@bot" -> "/cmd"
             name = cmd.strip().split()[0].lower()
             if "@" in name:
                 name = name.split("@", 1)[0]
-            if CFG.admin_user_id and from_id != str(CFG.admin_user_id):
-                continue
+
             if name == "/pause":
                 paused_state["paused"] = True
                 tg.send("⏸️ Sistem durduruldu (manuel işlem serbest)")
@@ -222,7 +224,7 @@ async def command_loop(client: BinanceClient, tg: TelegramNotifier, poller: Tele
                     tg.send("🧹 Tüm pozisyonlar kapatıldı (flat)")
                 except Exception as e:
                     tg.send(f"⚠️ flat error: {e}")
-            elif name in ("/selftest","selftest"):
+            elif name in ("/selftest", "selftest"):
                 try:
                     await tg.send("🧪 SelfTest başladı...")
 
