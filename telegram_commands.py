@@ -31,6 +31,11 @@ class TelegramCommandPoller:
             if str(msg.get("chat", {}).get("id")) != self.chat_id:
                 continue
             text = (msg.get("text") or "").strip().lower()
-            if text.startswith("/mode ") or text in ("/pause", "/resume", "/status", "/flat", "/autocoins", "/symbols", "/risk") or text.startswith("/size ") or text.startswith("/lev "):
+            if (
+                text.startswith("/mode ")
+                or text in ("/pause", "/resume", "/status", "/flat", "/autocoins", "/symbols", "/risk", "/selftest", "selftest")
+                or text.startswith("/size ")
+                or text.startswith("/lev ")
+            ):
                 cmds.append((text, from_id))
         return cmds
