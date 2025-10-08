@@ -8,7 +8,11 @@ from binance.um_futures import UMFutures
 
 class BinanceClient:
     def __init__(self, api_key: str, api_secret: str) -> None:
+        # UMFutures resmi Binance Futures (USDⓈ-M) istemcisi
         self.client = UMFutures(key=api_key, secret=api_secret)
+        # Geriye dönük uyumluluk: bazı yerlerde `um` alanı kullanılıyor
+        # (ör. eski selftest/probe scriptleri). AttributeError'ı önlemek için alias.
+        self.um = self.client  # type: ignore[attr-defined]
         self._exchange_info_cache: Dict[str, Any] | None = None
         self._symbol_filters: Dict[str, Dict[str, Any]] = {}
 
@@ -27,22 +31,26 @@ class BinanceClient:
             raise last_err
 
     def get_price(self, symbol: str) -> float:
-        ticker = self.client.ticker_price(symbol=symbol)
+        ticker = self._retry(self.client.ticker_price, symbol=symbol)
         return float(ticker["price"])  # type: ignore
+
+    def mark_price(self, symbol: str) -> Dict[str, Any]:
+        """Mark price wrapper (dict döner: { 'markPrice': '...' })"""
+        return self._retry(self.client.mark_price, symbol=symbol)
 
     def get_exchange_info(self) -> Dict[str, Any]:
         if self._exchange_info_cache is None:
-            self._exchange_info_cache = self.client.exchange_info()
+            self._exchange_info_cache = self._retry(self.client.exchange_info)
         return self._exchange_info_cache
 
     def get_klines(self, symbol: str, interval: str, limit: int = 500) -> List[List[Any]]:
-        return self.client.klines(symbol=symbol, interval=interval, limit=limit)
+        return self._retry(self.client.klines, symbol=symbol, interval=interval, limit=limit)
 
     def get_klines_range(self, symbol: str, interval: str, start_time_ms: int, end_time_ms: int, limit: int = 1500) -> List[List[Any]]:
         out: List[List[Any]] = []
         start = start_time_ms
         while True:
-            batch = self.client.klines(symbol=symbol, interval=interval, startTime=start, endTime=end_time_ms, limit=limit)
+            batch = self._retry(self.client.klines, symbol=symbol, interval=interval, startTime=start, endTime=end_time_ms, limit=limit)
             if not batch:
                 break
             out.extend(batch)
@@ -55,7 +63,7 @@ class BinanceClient:
 
     def set_leverage(self, symbol: str, leverage: int) -> None:
         try:
-            self.client.change_leverage(symbol=symbol, leverage=leverage)
+            self._retry(self.client.change_leverage, symbol=symbol, leverage=leverage)
         except Exception:
             pass
 
@@ -80,16 +88,16 @@ class BinanceClient:
         return self._retry(self.client.new_order, **params, max_retry=max_retry, backoff_ms=backoff_ms)
 
     def cancel_order(self, symbol: str, order_id: int | None = None, orig_client_order_id: str | None = None):
-        return self.client.cancel_order(symbol=symbol, orderId=order_id, origClientOrderId=orig_client_order_id)
+        return self._retry(self.client.cancel_order, symbol=symbol, orderId=order_id, origClientOrderId=orig_client_order_id)
 
     def cancel_open_orders(self, symbol: str):
-        return self.client.cancel_open_orders(symbol=symbol)
+        return self._retry(self.client.cancel_open_orders, symbol=symbol)
 
     def get_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
-        return self.client.get_open_orders(symbol=symbol)
+        return self._retry(self.client.get_open_orders, symbol=symbol)
 
     def get_position_risk(self, symbol: str | None = None) -> List[Dict[str, Any]]:
-        return self.client.position_risk(symbol=symbol)
+        return self._retry(self.client.position_risk, symbol=symbol)
 
     def income_history(self, start_time_ms: int | None = None, end_time_ms: int | None = None, income_type: str | None = None) -> List[Dict[str, Any]]:
         params: Dict[str, Any] = {}
@@ -99,12 +107,24 @@ class BinanceClient:
             params["endTime"] = end_time_ms
         if income_type is not None:
             params["incomeType"] = income_type
-        return self.client.income(**params)
+        return self._retry(self.client.income, **params)
 
     def get_24h_tickers(self) -> List[Dict[str, Any]]:
-        return self.client.ticker_24hr_price_change()
+        return self._retry(self.client.ticker_24hr_price_change)
 
-    def get_top_usdt_perp_symbols(self, top_n: int, exclude: Tuple[str, ...], price_max: float, prefer_low_price_max: float) -> List[str]:
+    def get_top_usdt_perp_symbols(self, top_n: int = 30, exclude: Tuple[str, ...] = tuple(), price_max: float = 100.0, prefer_low_price_max: float = 1.0, **kwargs) -> List[str]:
+        """
+        24h hacme göre USDT vadeli en likit sembolleri döndürür.
+        Eski çağrılarla uyum için limit/min_price/low_price_priority_max anahtarlarını da kabul eder.
+        """
+        # Eski imza uyumluluğu
+        if "limit" in kwargs and isinstance(kwargs["limit"], int):
+            top_n = kwargs["limit"]
+        if "min_price" in kwargs:
+            # min_price burada kullanılmıyor; mantık gereği düşük fiyat tercihleri `prefer_low_price_max` ile kontrol ediliyor
+            pass
+        if "low_price_priority_max" in kwargs:
+            prefer_low_price_max = float(kwargs["low_price_priority_max"])  # type: ignore[arg-type]
         tickers = self.get_24h_tickers()
         filtered = [t for t in tickers if t.get("symbol", "").endswith("USDT") and t.get("symbol") not in exclude]
         filtered.sort(key=lambda x: float(x.get("quoteVolume", 0.0)), reverse=True)
