@@ -388,10 +388,12 @@ async def main():
     us = UserStream(CFG.binance_api_key, CFG.binance_api_secret)
 
     tg.send("🔌 WS trader started (LIVE/PAPER)")
-    await asyncio.gather(wsm.start(), us.start())
 
     paused_state = {"paused": False}
+    # Tüm görevleri tek bir gather içinde paralel çalıştır
     await asyncio.gather(
+        wsm.start(),
+        us.start(),
         bars_loop(client, tg, wsm, paused_state),
         consume_user_events(us, client, tg),
         symbol_refresh_loop(client, wsm, tg),
