@@ -3,3 +3,6 @@
 __pycache__/
 *.log
 state.json
+
+.DS_Store
+._*
