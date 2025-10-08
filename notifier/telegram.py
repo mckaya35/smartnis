@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import requests
 
 class TelegramNotifier:
@@ -17,3 +18,7 @@ class TelegramNotifier:
             }, timeout=10)
         except Exception:
             pass
+
+    async def send_async(self, text: str, disable_web_page_preview: bool = True) -> None:
+        # Offload blocking HTTP call to a background thread to avoid blocking the event loop
+        await asyncio.to_thread(self.send, text, disable_web_page_preview)
