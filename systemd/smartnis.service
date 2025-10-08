@@ -1,0 +1,16 @@
+[Unit]
+Description=Smart Nis V2.5 Trader Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/smartnis
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/opt/smartnis/.venv/bin/python /opt/smartnis/trader.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/smartnis.log
+StandardError=append:/var/log/smartnis.err
+
+[Install]
+WantedBy=multi-user.target
