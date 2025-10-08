@@ -42,7 +42,7 @@ class Config:
     smart_close_adj_pct: float = float(os.getenv("SMART_CLOSE_ADJ_PCT", "0.001"))
 
     symbol_refresh_hours: int = int(os.getenv("SYMBOL_REFRESH_HOURS", "6"))
-    exclude_symbols: list[str] = tuple(_get_list("EXCLUDE_SYMBOLS", "BNBUSDT,BTCUSDT,ETHUSDT,SOLUSDT"))
+    exclude_symbols: tuple[str, ...] = tuple(_get_list("EXCLUDE_SYMBOLS", "BNBUSDT,BTCUSDT,ETHUSDT,SOLUSDT"))
 
     preferred_price_max: float = float(os.getenv("PREFERRED_PRICE_MAX", "100"))
     low_price_priority_max: float = float(os.getenv("LOW_PRICE_PRIORITY_MAX", "1"))
