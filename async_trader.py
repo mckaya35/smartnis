@@ -64,7 +64,7 @@ def maybe_move_to_lock_profit(symbol: str, last_price: float, client: BinanceCli
             state["sl_order_id"] = resp.get("orderId") if isinstance(resp, dict) else None
             state["sl_price"] = float(new_sl_fmt)
             state["be_done"] = True
-            tg.send(f"🔒 {symbol} SL kilit kâr (LONG): {new_sl_fmt}")
+            asyncio.create_task(tg.send_async(f"🔒 {symbol} SL kilit kâr (LONG): {new_sl_fmt}"))
     else:
         target_sl = entry - lock_atr
         if last_price <= entry - be_trg and target_sl < old_sl:
@@ -78,7 +78,7 @@ def maybe_move_to_lock_profit(symbol: str, last_price: float, client: BinanceCli
             state["sl_order_id"] = resp.get("orderId") if isinstance(resp, dict) else None
             state["sl_price"] = float(new_sl_fmt)
             state["be_done"] = True
-            tg.send(f"🔒 {symbol} SL kilit kâr (SHORT): {new_sl_fmt}")
+            asyncio.create_task(tg.send_async(f"🔒 {symbol} SL kilit kâr (SHORT): {new_sl_fmt}"))
 
 
 def apply_tp2_trailing(symbol: str, last_price: float, client: BinanceClient, tg: TelegramNotifier) -> None:
@@ -102,7 +102,7 @@ def apply_tp2_trailing(symbol: str, last_price: float, client: BinanceClient, tg
             resp = client.place_stop_market(symbol, "SELL", new_sl_fmt, close_position=True, reduce_only=True, client_id=cid("SLTR", symbol), max_retry=CFG.order_retry_max, backoff_ms=CFG.order_retry_backoff_ms)
             state["sl_order_id"] = resp.get("orderId") if isinstance(resp, dict) else None
             state["sl_price"] = float(new_sl_fmt)
-            tg.send(f"🧭 {symbol} SL trail (LONG): {new_sl_fmt}")
+            asyncio.create_task(tg.send_async(f"🧭 {symbol} SL trail (LONG): {new_sl_fmt}"))
     else:
         target_sl = min(old_sl, last_price + trail)
         if target_sl < old_sl:
@@ -115,7 +115,7 @@ def apply_tp2_trailing(symbol: str, last_price: float, client: BinanceClient, tg
             resp = client.place_stop_market(symbol, "BUY", new_sl_fmt, close_position=True, reduce_only=True, client_id=cid("SLTR", symbol), max_retry=CFG.order_retry_max, backoff_ms=CFG.order_retry_backoff_ms)
             state["sl_order_id"] = resp.get("orderId") if isinstance(resp, dict) else None
             state["sl_price"] = float(new_sl_fmt)
-            tg.send(f"🧭 {symbol} SL trail (SHORT): {new_sl_fmt}")
+            asyncio.create_task(tg.send_async(f"🧭 {symbol} SL trail (SHORT): {new_sl_fmt}"))
 
 
 async def consume_user_events(us: UserStream, client: BinanceClient, tg: TelegramNotifier) -> None:
@@ -168,9 +168,8 @@ async def symbol_refresh_loop(client: BinanceClient, wsm: WSManager, tg: Telegra
         try:
             symbols = client.get_top_usdt_perp_symbols(30, CFG.exclude_symbols, CFG.preferred_price_max, CFG.low_price_priority_max)[:CFG.max_concurrent_symbols]
             # basit re-subscribe: yeni WSManager başlat (kapanış basit bırakıldı)
-            wsm.__init__(symbols, [CFG.entry_tf, CFG.mtf_fast, CFG.mtf_slow1, CFG.mtf_slow2])
-            await wsm.start()
-            tg.send("🔁 WS symbols refreshed: " + ", ".join(symbols))
+            await wsm.restart(symbols, [CFG.entry_tf, CFG.mtf_fast, CFG.mtf_slow1, CFG.mtf_slow2])
+            await tg.send_async("🔁 WS symbols refreshed: " + ", ".join(symbols))
             LAST_REFRESH = datetime.now(timezone.utc)
         except Exception as e:
             tg.send(f"⚠️ WS symbol refresh error: {e}")
@@ -179,7 +178,9 @@ async def symbol_refresh_loop(client: BinanceClient, wsm: WSManager, tg: Telegra
 async def command_loop(client: BinanceClient, tg: TelegramNotifier, poller: TelegramCommandPoller, paused_state: dict) -> None:
     while True:
         await asyncio.sleep(2)
-        for (cmd, from_id) in poller.get_commands():
+        # Offload blocking HTTP polling to a thread
+        cmds = await asyncio.to_thread(poller.get_commands)
+        for (cmd, from_id) in cmds:
             if CFG.admin_user_id and from_id != str(CFG.admin_user_id):
                 continue
             # Komut adını normalize et: "/cmd arg" veya "/cmd@bot" -> "/cmd"
@@ -189,30 +190,31 @@ async def command_loop(client: BinanceClient, tg: TelegramNotifier, poller: Tele
 
             if name == "/pause":
                 paused_state["paused"] = True
-                tg.send("⏸️ Sistem durduruldu (manuel işlem serbest)")
+                await tg.send_async("⏸️ Sistem durduruldu (manuel işlem serbest)")
             elif name == "/resume":
                 paused_state["paused"] = False
-                tg.send("▶️ Sistem devam ediyor")
+                await tg.send_async("▶️ Sistem devam ediyor")
             elif name == "/status":
-                tg.send(f"ℹ️ RUN_MODE={CFG.run_mode}, Mod={'simple' if CFG.simple_mode else 'advanced'}, Lev={CFG.leverage}x, Size={CFG.order_usdt_size} USDT")
+                await tg.send_async(f"ℹ️ RUN_MODE={CFG.run_mode}, Mod={'simple' if CFG.simple_mode else 'advanced'}, Lev={CFG.leverage}x, Size={CFG.order_usdt_size} USDT")
             elif name == "/autocoins":
                 try:
-                    symbols = client.get_top_usdt_perp_symbols(30, CFG.exclude_symbols, CFG.preferred_price_max, CFG.low_price_priority_max)[:CFG.max_concurrent_symbols]
-                    tg.send("🔁 Auto symbols: " + ", ".join(symbols))
+                    symbols = await asyncio.to_thread(client.get_top_usdt_perp_symbols, 30, CFG.exclude_symbols, CFG.preferred_price_max, CFG.low_price_priority_max)
+                    symbols = symbols[:CFG.max_concurrent_symbols]
+                    await tg.send_async("🔁 Auto symbols: " + ", ".join(symbols))
                 except Exception as e:
-                    tg.send(f"⚠️ autocoins error: {e}")
+                    await tg.send_async(f"⚠️ autocoins error: {e}")
             elif name == "/symbols":
                 try:
-                    risks = client.get_position_risk()
+                    risks = await asyncio.to_thread(client.get_position_risk)
                     pos = [f"{p.get('symbol')}:{p.get('positionAmt')}" for p in risks if abs(float(p.get('positionAmt',0) or 0))>1e-9]
-                    tg.send("ℹ️ Positions: " + (", ".join(pos) if pos else "none"))
+                    await tg.send_async("ℹ️ Positions: " + (", ".join(pos) if pos else "none"))
                 except Exception as e:
-                    tg.send(f"⚠️ symbols error: {e}")
+                    await tg.send_async(f"⚠️ symbols error: {e}")
             elif name == "/risk":
-                tg.send(f"ℹ️ Risk USDT: {CFG.risk_usdt_per_trade}, Leverage: {CFG.leverage}x")
+                await tg.send_async(f"ℹ️ Risk USDT: {CFG.risk_usdt_per_trade}, Leverage: {CFG.leverage}x")
             elif name == "/flat":
                 try:
-                    risks = client.get_position_risk()
+                    risks = await asyncio.to_thread(client.get_position_risk)
                     for p in risks:
                         symbol = p.get("symbol")
                         amt = float(p.get("positionAmt", 0) or 0)
@@ -220,49 +222,52 @@ async def command_loop(client: BinanceClient, tg: TelegramNotifier, poller: Tele
                             continue
                         side = "SELL" if amt > 0 else "BUY"
                         qty = client.format_qty(symbol, abs(amt))
-                        client.place_market_order(symbol, side, qty, reduce_only=True, client_id=cid("FLAT", symbol), max_retry=CFG.order_retry_max, backoff_ms=CFG.order_retry_backoff_ms)
-                    tg.send("🧹 Tüm pozisyonlar kapatıldı (flat)")
+                        await asyncio.to_thread(client.place_market_order, symbol, side, qty, True, cid("FLAT", symbol), CFG.order_retry_max, CFG.order_retry_backoff_ms)
+                    await tg.send_async("🧹 Tüm pozisyonlar kapatıldı (flat)")
                 except Exception as e:
-                    tg.send(f"⚠️ flat error: {e}")
+                    await tg.send_async(f"⚠️ flat error: {e}")
             elif name in ("/selftest", "selftest"):
                 try:
-                    await tg.send("🧪 SelfTest başladı...")
+                    await tg.send_async("🧪 SelfTest başladı...")
 
                     # 1) Test sembolü: aktif listeden ya da düşmezse BTCUSDT
                     try:
                         top = client.get_top_usdt_perp_symbols(limit=1, min_price=0.0, exclude=["BNB","BTC","ETH","SOL"])
                         symbol = top[0] if top else "BTCUSDT"
-                        await tg.send(f"🧪 Symbol seçildi: {symbol}")
+                        await tg.send_async(f"🧪 Symbol seçildi: {symbol}")
                     except Exception as e:
                         symbol = "BTCUSDT"
-                        await tg.send(f"🧪 Symbol hatası, BTCUSDT kullanılıyor: {e}")
+                        await tg.send_async(f"🧪 Symbol hatası, BTCUSDT kullanılıyor: {e}")
 
                     # 2) Piyasa fiyatı ve küçük miktar
-                    ticker = client._retry(lambda: client.um.mark_price(symbol=symbol))
+                    ticker = await asyncio.to_thread(client._retry, lambda: client.um.mark_price(symbol=symbol))
                     mark = float(ticker.get("markPrice", "0"))
                     qty = client.format_qty(symbol, max(0.001, (CFG.order_size_usdt or 5.0) / max(mark, 1e-8)))
-                    await tg.send(f"🧪 Fiyat: {mark}, Miktar: {qty}")
+                    await tg.send_async(f"🧪 Fiyat: {mark}, Miktar: {qty}")
 
                     # 3) Post-only (GTX) limit buy (fill olmasın); 2 sn sonra iptal
                     limit_price = client.format_price(symbol, mark * (1 - CFG.maker_offset_bps / 10000.0))
-                    res = client._retry(lambda: client.um.new_order(
+                    res = await asyncio.to_thread(client._retry, lambda: client.um.new_order(
                         symbol=symbol, side="BUY", type="LIMIT",
                         quantity=qty, price=limit_price, timeInForce="GTX",
                         newClientOrderId=cid("selftest", symbol)
                     ))
                     oid = (res or {}).get("orderId") or (res or {}).get("clientOrderId")
-                    await tg.send(f"🧪 GTX LIMIT gönderildi: {symbol} {qty} @{limit_price} (oid={oid})")
+                    await tg.send_async(f"🧪 GTX LIMIT gönderildi: {symbol} {qty} @{limit_price} (oid={oid})")
                     await asyncio.sleep(2)
                     try:
                         if oid:
-                            client.cancel_order(symbol, oid)
-                            await tg.send("🧪 Emir iptal edildi")
+                            if isinstance(oid, int):
+                                await asyncio.to_thread(client.cancel_order, symbol, oid, None)
+                            else:
+                                await asyncio.to_thread(client.cancel_order, symbol, None, str(oid))
+                            await tg.send_async("🧪 Emir iptal edildi")
                     except Exception as e:
-                        await tg.send(f"🧪 İptal hatası: {e}")
+                        await tg.send_async(f"🧪 İptal hatası: {e}")
 
-                    await tg.send("✅ SelfTest tamamlandı!")
+                    await tg.send_async("✅ SelfTest tamamlandı!")
                 except Exception as e:
-                    await tg.send(f"⚠️ SelfTest genel hata: {e}")
+                    await tg.send_async(f"⚠️ SelfTest genel hata: {e}")
 
 
 async def bars_loop(client: BinanceClient, tg: TelegramNotifier, wsm: WSManager, paused_state: dict) -> None:
